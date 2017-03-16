@@ -1,0 +1,5 @@
+fun bar(s: String) {}
+
+fun foo() {
+    bar("Test")
+}

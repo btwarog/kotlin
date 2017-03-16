@@ -1,0 +1,6 @@
+class My {
+    fun run() {
+        val foo = doThing()
+        System.out.println(foo)
+    }
+}
