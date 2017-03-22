@@ -34,7 +34,9 @@ import org.jetbrains.kotlin.idea.util.application.executeWriteCommand
 import org.jetbrains.kotlin.idea.util.application.runReadAction
 import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtImportDirective
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
+import org.jetbrains.kotlin.psi.psiUtil.forEachDescendantOfType
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 
 interface UsageReplacementStrategy {
@@ -59,13 +61,14 @@ fun UsageReplacementStrategy.replaceUsagesInWholeProject(
                                 .filterIsInstance<KtSimpleNameReference>()
                                 .map { ref -> ref.expression }
                     }
-                    this@replaceUsagesInWholeProject.replaceUsages(usages, project, commandName, postAction)
+                    this@replaceUsagesInWholeProject.replaceUsages(usages, targetPsiElement, project, commandName, postAction)
                 }
             })
 }
 
 private fun UsageReplacementStrategy.replaceUsages(
         usages: Collection<KtSimpleNameExpression>,
+        targetPsiElement: PsiElement,
         project: Project,
         commandName: String,
         postAction: () -> Unit
@@ -74,10 +77,11 @@ private fun UsageReplacementStrategy.replaceUsages(
         project.executeWriteCommand(commandName) {
             // we should delete imports later to not affect other usages
             val importsToDelete = arrayListOf<KtImportDirective>()
+            val replacements = mutableListOf<KtElement>()
 
             for (usage in usages) {
                 try {
-                    if (!usage.isValid) continue // TODO: nested calls
+                    if (!usage.isValid) continue
 
                     //TODO: keep the import if we don't know how to replace some of the usages
                     val importDirective = usage.getStrictParentOfType<KtImportDirective>()
@@ -88,10 +92,26 @@ private fun UsageReplacementStrategy.replaceUsages(
                         continue
                     }
 
-                    createReplacer(usage)?.invoke()
+                    val replacement = createReplacer(usage)?.invoke()
+                    if (replacement != null) {
+                        replacements += replacement
+                    }
                 }
                 catch (e: Throwable) {
                     LOG.error(e)
+                }
+            }
+
+            if (targetPsiElement is KtNamedDeclaration) {
+                val name = targetPsiElement.name
+                if (name != null) {
+                    for (replacement in replacements) {
+                        replacement.forEachDescendantOfType<KtSimpleNameExpression> { usage ->
+                            if (usage.isValid && usage.getReferencedName() == name) {
+                                createReplacer(usage)?.invoke()
+                            }
+                        }
+                    }
                 }
             }
 
