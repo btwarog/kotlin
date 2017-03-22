@@ -133,7 +133,7 @@ class ConvertFunctionToPropertyIntention : SelfTargetingIntention<KtNamedFunctio
                             ?.let { reportDeclarationConflict(conflicts, it) { "$it already exists" } }
                 }
 
-                val usages = ReferencesSearch.search(callable)
+                val usages = ReferencesSearch.search(callable).findAll()
                 for (usage in usages) {
                     if (usage is KtSimpleNameReference) {
                         val expression = usage.expression
