@@ -228,7 +228,7 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
         }
 
         private fun hasLabeledReturnPreventingConversion(samConstructorCall: KtCallExpression): Boolean {
-            val argument = samConstructorCall.samConstructorValueArgument()!!
+            val argument = samConstructorCall.samConstructorValueArgument() ?: return false
             val samConstructorName = (samConstructorCall.calleeExpression as KtSimpleNameExpression).getReferencedNameAsName()
             return argument.anyDescendantOfType<KtReturnExpression> { it.getLabelNameAsName() == samConstructorName }
         }
