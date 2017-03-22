@@ -337,8 +337,10 @@ class KtPsiFactory(private val project: Project) {
 
     fun createTypeParameter(text: String) = createTypeParameterList("<$text>").parameters.first()!!
 
-    fun createLambdaParameterList(text: String) =
-            createLambdaExpression(text, "0").functionLiteral.valueParameterList!!
+    fun createLambdaParameterListIfAny(text: String) =
+            createLambdaExpression(text, "0").functionLiteral.valueParameterList
+
+    fun createLambdaParameterList(text: String) = createLambdaParameterListIfAny(text)!!
 
     fun createLambdaExpression(parameters: String, body: String): KtLambdaExpression =
             (if (parameters.isNotEmpty()) createExpression("{ $parameters -> $body }")
