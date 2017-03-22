@@ -46,6 +46,7 @@ import org.jetbrains.kotlin.resolve.scopes.SyntheticScopes
 import org.jetbrains.kotlin.resolve.scopes.collectSyntheticMemberFunctions
 import org.jetbrains.kotlin.synthetic.SamAdapterExtensionFunctionDescriptor
 import org.jetbrains.kotlin.types.TypeUtils
+import org.jetbrains.kotlin.utils.keysToMapExceptNulls
 
 class RedundantSamConstructorInspection : AbstractKotlinInspection() {
     override fun buildVisitor(holder: ProblemsHolder, isOnTheFly: Boolean, session: LocalInspectionToolSession): PsiElementVisitor {
@@ -77,11 +78,12 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
 
                 val samConstructorCalls = samConstructorCallsToBeConverted(expression)
                 if (samConstructorCalls.isEmpty()) return
-                if (samConstructorCalls.size == 1) {
-                    val single = samConstructorCalls.single()
+                val single = samConstructorCalls.singleOrNull()
+                if (single != null) {
+                    val calleeExpression = single.calleeExpression!!
                     val problemDescriptor = holder.manager.
-                            createProblemDescriptor(single.calleeExpression!!,
-                                                    single.typeArgumentList ?: single.calleeExpression!!,
+                            createProblemDescriptor(calleeExpression,
+                                                    single.typeArgumentList ?: calleeExpression,
                                                     "Redundant SAM-constructor",
                                                     ProblemHighlightType.LIKE_UNUSED_SYMBOL,
                                                     isOnTheFly,
@@ -110,7 +112,8 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
             return callExpression.getQualifiedExpressionForSelectorOrThis().replace(functionalArgument) as KtLambdaExpression
         }
 
-        private fun canBeReplaced(parentCall: KtCallExpression, samConstructorArguments: List<KtValueArgument>): Boolean {
+        private fun canBeReplaced(parentCall: KtCallExpression,
+                                  samConstructorCallArgumentMap: Map<KtValueArgument, KtCallExpression>): Boolean {
             val context = parentCall.analyze(BodyResolveMode.PARTIAL)
 
             val calleeExpression = parentCall.calleeExpression ?: return false
@@ -120,7 +123,7 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
 
             val dataFlow = context.getDataFlowInfoBefore(parentCall)
             val callResolver = parentCall.getResolutionFacade().frontendService<CallResolver>()
-            val newCall = CallWithConvertedArguments(originalCall.call, samConstructorArguments)
+            val newCall = CallWithConvertedArguments(originalCall.call, samConstructorCallArgumentMap)
 
             val qualifiedExpression = parentCall.getQualifiedExpressionForSelectorOrThis()
             val expectedType = context[BindingContext.EXPECTED_EXPRESSION_TYPE, qualifiedExpression] ?: TypeUtils.NO_EXPECTED_TYPE
@@ -133,14 +136,17 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
             return samAdapterOriginalDescriptor.original == originalCall.resultingDescriptor.original
         }
 
-        private class CallWithConvertedArguments(original: Call, val argumentsToConvert: Collection<ValueArgument>): DelegatingCall(original) {
+        private class CallWithConvertedArguments(
+                original: Call,
+                val callArgumentMapToConvert: Map<KtValueArgument, KtCallExpression>
+        ) : DelegatingCall(original) {
             private val newArguments: List<ValueArgument>
 
             init {
                 val factory = KtPsiFactory(callElement)
                 newArguments = original.valueArguments.map { argument ->
-                    if (argument !in argumentsToConvert) return@map argument
-                    val newExpression = argument.toCallExpression()!!.samConstructorValueArgument()!!.getArgumentExpression()!!
+                    val call = callArgumentMapToConvert[argument]
+                    val newExpression = call?.samConstructorValueArgument()?.getArgumentExpression() ?: return@map argument
                     factory.createArgument(newExpression, argument.getArgumentName()?.asName)
                 }
             }
@@ -149,10 +155,6 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
         }
 
         fun samConstructorCallsToBeConverted(functionCall: KtCallExpression): List<KtCallExpression> {
-            return samConstructorArgumentsToBeConverted(functionCall).map { it.toCallExpression()!! }
-        }
-
-        private fun samConstructorArgumentsToBeConverted(functionCall: KtCallExpression): List<KtValueArgument> {
             if (functionCall.valueArguments.all { !canBeSamConstructorCall(it) }) {
                 return emptyList()
             }
@@ -161,22 +163,24 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
             val functionResolvedCall = functionCall.getResolvedCall(bindingContext) ?: return emptyList()
             if (!functionResolvedCall.isReallySuccess()) return emptyList()
 
-            val samConstructorCallArguments = functionCall.valueArguments.filter {
-                it.toCallExpression()?.getResolvedCall(bindingContext)?.resultingDescriptor?.original is SamConstructorDescriptor
+            val samConstructorCallArgumentMap = functionCall.valueArguments.keysToMapExceptNulls { it.toCallExpression() }.filter {
+                (_, call) -> call.getResolvedCall(bindingContext)?.resultingDescriptor?.original is SamConstructorDescriptor
             }
 
-            if (samConstructorCallArguments.isEmpty()) return emptyList()
+            if (samConstructorCallArgumentMap.isEmpty()) return emptyList()
 
-            if (samConstructorCallArguments.any { hasLabeledReturnPreventingConversion(it.toCallExpression()!!) }) return emptyList()
+            if (samConstructorCallArgumentMap.any { hasLabeledReturnPreventingConversion(it.value) }) return emptyList()
 
             val originalFunctionDescriptor = functionResolvedCall.resultingDescriptor.original as? FunctionDescriptor ?: return emptyList()
             val containingClass = originalFunctionDescriptor.containingDeclaration as? ClassDescriptor ?: return emptyList()
 
             // SAM adapters for static functions
-            for (staticFunWithSameName in containingClass.staticScope.getContributedFunctions(functionResolvedCall.resultingDescriptor.name, NoLookupLocation.FROM_IDE)) {
+            val contributedFunctions = containingClass.staticScope.getContributedFunctions(
+                    functionResolvedCall.resultingDescriptor.name, NoLookupLocation.FROM_IDE)
+            for (staticFunWithSameName in contributedFunctions) {
                 if (staticFunWithSameName is SamAdapterDescriptor<*>) {
-                    if (isSamAdapterSuitableForCall(staticFunWithSameName, originalFunctionDescriptor, samConstructorCallArguments.size)) {
-                        return samConstructorCallArguments.takeIf { canBeReplaced(functionCall, it) } ?: emptyList()
+                    if (isSamAdapterSuitableForCall(staticFunWithSameName, originalFunctionDescriptor, samConstructorCallArgumentMap.size)) {
+                        return samConstructorCallArgumentMap.takeIf { canBeReplaced(functionCall, it) }?.map { it.value } ?: emptyList()
                     }
                 }
             }
@@ -189,8 +193,8 @@ class RedundantSamConstructorInspection : AbstractKotlinInspection() {
                     NoLookupLocation.FROM_IDE)
             for (syntheticExtension in syntheticExtensions) {
                 val samAdapter = syntheticExtension as? SamAdapterExtensionFunctionDescriptor ?: continue
-                if (isSamAdapterSuitableForCall(samAdapter, originalFunctionDescriptor, samConstructorCallArguments.size)) {
-                    return samConstructorCallArguments.takeIf { canBeReplaced(functionCall, it) } ?: emptyList()
+                if (isSamAdapterSuitableForCall(samAdapter, originalFunctionDescriptor, samConstructorCallArgumentMap.size)) {
+                    return samConstructorCallArgumentMap.takeIf { canBeReplaced(functionCall, it) }?.map { it.value } ?: emptyList()
                 }
             }
 
