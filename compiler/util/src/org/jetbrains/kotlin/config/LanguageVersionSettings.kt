@@ -79,7 +79,8 @@ enum class LanguageFeature(
 
 enum class LanguageVersion(val major: Int, val minor: Int) : DescriptionAware {
     KOTLIN_1_0(1, 0),
-    KOTLIN_1_1(1, 1);
+    KOTLIN_1_1(1, 1),
+    KOTLIN_1_2(1, 2);
 
     val versionString: String
         get() = "$major.$minor"
@@ -97,7 +98,7 @@ enum class LanguageVersion(val major: Int, val minor: Int) : DescriptionAware {
         fun fromFullVersionString(str: String) = str.split(".", "-").let { if (it.size >= 2) fromVersionString("${it[0]}.${it[1]}") else null }
 
         @JvmField
-        val LATEST = values().last()
+        val DEFAULT = KOTLIN_1_1
     }
 }
 
@@ -158,6 +159,6 @@ class LanguageVersionSettingsImpl @JvmOverloads constructor(
 
     companion object {
         @JvmField
-        val DEFAULT = LanguageVersionSettingsImpl(LanguageVersion.LATEST, ApiVersion.LATEST)
+        val DEFAULT = LanguageVersionSettingsImpl(LanguageVersion.DEFAULT, ApiVersion.DEFAULT)
     }
 }
